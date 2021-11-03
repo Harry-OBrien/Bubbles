@@ -3,9 +3,9 @@ import peasy.*;
 class Scene {
   PeasyCam cam;
   private int cubeSize;
-
+  
   Scene(PApplet parent, int cubeSize) {
-    this.cam = new PeasyCam(parent, 0, 0, 250, 500);
+    this.cam = new PeasyCam(parent, 0, 0, 200, 500);
     cam.setMaximumDistance(1200);
     cam.setMinimumDistance(50);
     cam.setWheelScale(0.3);

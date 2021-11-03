@@ -8,8 +8,8 @@ void setup() {
   // Environment settings
   fullScreen(P3D);
   pixelDensity(2);
-  noCursor();
-  frameRate(60);
+  //noCursor();
+  frameRate(30);
   rectMode(CENTER);
 
   // Entities

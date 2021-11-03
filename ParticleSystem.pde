@@ -1,19 +1,25 @@
-
-
 class ParticleSystem {
+  // TODO: Control resolution by slider
 
+  // Particles
+  ArrayList<Particle> particles;
+  int attractionDistance = 100;
+
+  // Boundary
+  private int cubeSize;
+
+  // Marching cube data
   float[][][] field;
 
-  // TODO: Control resolution by slider
   private int res;
   private int cols, rows, aisles;
-  private int cubeSize;
   private float threshold;
 
   private ArrayList<ArrayList<PVector>> triangleVertices;
 
   ParticleSystem(int cubeSize, int res, float threshold) {
     this.cubeSize = cubeSize;
+
     this.res = res;
     this.threshold = threshold;
 
@@ -25,39 +31,132 @@ class ParticleSystem {
     aisles = 1 + cubeSize / res;
     field = new float[cols][rows][aisles];
 
-    //OpenSimplexNoise noise = new OpenSimplexNoise();
+    // Particles
+    particles = new ArrayList<Particle>();
 
-    //float increment = 0.1;
-    //float xOff = 0;
-
-    //for (int i = 0; i < cols; i++) {
-    //  xOff += increment;
-    //  float yOff = 0;
-
-    //  for (int j = 0; j < rows; j++) {
-    //    yOff += increment;
-    //    float zOff = 0;
-
-    //    for (int k = 0; k < aisles; k++) {
-    //      // Cap off the end of the meshes so we can't see into them
-    //      if ( i == 0 || i == cols - 1 ||
-    //        j == 0 || j == rows - 1 ||
-    //        k == 0 || k == aisles - 1) {
-    //          field[i][j][k] = 0.3;
-    //          continue;
-    //      }
-          
-    //      PVector pos = new PVector(i, j, k);
-    //      field[i][j][k] = (float)(noise.eval(xOff, yOff, zOff));
-    //      zOff += increment;
-    //    }
-    //  }
-    //}
+    for (int i = 0; i < 13; i++) {
+      PVector startingPos = new PVector(random(100, 400), random(100, 400), random(100, 400));
+      addBubbleAt(startingPos);
+    }
   }
 
+  // MARK: UPDATE
   void update() {
+    // Move the particles and add any attraction and environmental forces
+    updateParticles();
 
-    // MARCHING CUBES ALGORITHM
+    // Fill in field values using particle locations <- Metaballs implementation
+    calculateFieldValues();
+
+    // Generate the mesh for the previously calculated field values
+    createMesh();
+  }
+
+  // MARK: DRAW
+  void show() {
+    // Draw particles
+    pushMatrix();
+    translate(-(cubeSize/2), -(cubeSize/2), 0);
+    // Draw the particles
+    //for (Particle p : particles) p.show();
+
+    //Draw the field
+    //fill(255);
+    //drawField();
+
+    // Now draw the bubble mesh
+    drawMesh();
+    popMatrix();
+  }
+
+  // MARK: PARTICLES
+  private void updateParticles() {
+    // Update particles
+    for (Particle p : particles) {
+      for (Particle other : particles) {
+        //Ignore ourself
+        if (p == other) continue;
+
+        // Attract the particles towards each other
+        // TODO: attract to each other based on metaballs algorithm
+        float dist = PVector.sub(other.getPos(), p.getPos()).mag();
+        if (dist < attractionDistance)
+          p.attractedTo(other);
+      }
+
+      // Apply environment variables to particle
+      PVector gravity = new PVector(0, 0, -0.01);
+      p.applyForce(gravity);
+
+      // apply friction
+      float c = 0.04;
+      PVector friction = p.getVel();
+      friction.mult(-1);
+      friction.normalize();
+      friction.mult(c);
+      p.applyForce(friction);
+
+      p.update();
+    }
+  }
+
+  void addBubbleAt(PVector pos) {
+    // Make sure within bounds
+    if (pos.x > 11 && pos.x < 489 &&
+      pos.y > 11 && pos.y < 489 &&
+      pos.z > 11 && pos.x < 489)
+    {
+      Particle p = new Particle(pos, cubeSize);
+      particles.add(p);
+    }
+  }
+
+  private void calculateFieldValues() {
+    for (int i = 0; i < cols; i++) {
+      for (int j = 0; j < rows; j++) {
+        for (int k = 0; k < aisles; k++) {
+          // Cap off the edges, don't bother with the bottom
+          if ( i == 0 || i == cols - 1 ||
+            j == 0 || j == rows - 1 ||
+            k == aisles - 1) {
+            field[i][j][k] = 0.3;
+            continue;
+          }
+          // Metaballs implementation
+          float sum = 0;
+          PVector scaledLocation = new PVector(i * res, j * res, k * res);
+          for (Particle p : particles) {
+            PVector pos = p.getPos();
+            PVector diff = PVector.sub(scaledLocation, pos);
+
+
+            float r = p.getRadius();
+            sum += (r * r) / diff.magSq();
+          }
+          field[i][j][k] = sum;
+        }
+      }
+    }
+  }
+
+
+  // MARK: MARCHING CUBE
+  private void drawField() {
+    strokeWeight(4);
+    for (int i = 0; i < cols; i++) {
+      for (int j = 0; j < rows; j++) {
+        for (int k = 0; k < aisles; k++) {
+          if (field[i][j][k] < threshold) continue;
+
+          stroke(field[i][j][k] * 255);
+          point(i*res, j*res, k*res);
+        }
+      }
+    }
+  }
+
+  // MARCHING CUBES ALGORITHM
+  private void createMesh() {
     // we go to rows - 1 because the final row/col/aisle doesn't have any neighbours
     for (int i = 0; i < cols - 1; i++) {
       for (int j = 0; j < rows - 1; j++) {
@@ -85,35 +184,10 @@ class ParticleSystem {
     }
   }
 
-  void show() {
-    fill(255);
-    pushMatrix();
-    translate(-(cubeSize/2), -(cubeSize/2), 0);
-
-    //Draw the field
-    //drawField();
-
-    // Now draw the bubble mesh
-    drawMesh();
-  }
-
-  private void drawField() {
-    strokeWeight(4);
-
-    for (int i = 0; i < cols; i++) {
-      for (int j = 0; j < rows; j++) {
-        for (int k = 0; k < aisles; k++) {
-          if (field[i][j][k] < threshold) continue;
-
-          stroke(field[i][j][k] * 255);
-          point(i*res, j*res, k*res);
-        }
-      }
-    }
-  }
-
   private void drawMesh() {
-    strokeWeight(0);
+    fill(255, 255, 255, 120);
+    //fill(255);
+    noStroke();
     for (ArrayList<PVector> vertices : triangleVertices) {
       beginShape(TRIANGLES);
       for (PVector v : vertices) {
@@ -122,7 +196,6 @@ class ParticleSystem {
       endShape();
     }
     triangleVertices.clear();
-    popMatrix();
   }
 
   private float[] getVertices(int i, int j, int k) {
@@ -159,84 +232,88 @@ class ParticleSystem {
 
     float amt = 0;
     switch(idx) {
-    case 0:
+    case 0 :
       amt = (threshold - corners[0]) / (corners[1] - corners[0]);
       edgeVertex.x += lerp(0, res, amt);
       break;
 
-    case 1:
+    case 1 :
       amt = (threshold - corners[1])/(corners[2] - corners[1]);
       edgeVertex.x += res;
       edgeVertex.y += lerp(0, res, amt);
       break;
 
-    case 2:
+    case 2 :
       amt = (threshold - corners[3])/(corners[2] - corners[3]);
       edgeVertex.x += lerp(0, res, amt);
       edgeVertex.y += res;
       break;
 
-    case 3:
+    case 3 :
       amt = (threshold - corners[0])/(corners[3] - corners[0]);
       edgeVertex.y += lerp(0, res, amt);
       break;
 
-    case 4:
+    case 4 :
       amt = (threshold - corners[4])/(corners[5] - corners[4]);
       edgeVertex.x += lerp(0, res, amt);
       edgeVertex.z += res;
       break;
 
-    case 5:
+    case 5 :
       amt = (threshold - corners[5])/(corners[6] - corners[5]);
       edgeVertex.x += res;
       edgeVertex.y += lerp(0, res, amt);
       edgeVertex.z += res;
       break;
 
-    case 6:
+    case 6 :
       amt = (threshold - corners[7])/(corners[6] - corners[7]);
       edgeVertex.x += lerp(0, res, amt);
       edgeVertex.y += res;
       edgeVertex.z += res;
       break;
 
-    case 7:
+    case 7 :
       amt = (threshold - corners[4])/(corners[7] - corners[4]);
       edgeVertex.y += lerp(0, res, amt);
       edgeVertex.z += res;
       break;
 
-    case 8:
+    case 8 :
       amt = (threshold - corners[0])/(corners[4] - corners[0]);
       edgeVertex.z += lerp(0, res, amt);
       break;
 
-    case 9:
+    case 9 :
       amt = (threshold - corners[1])/(corners[5] - corners[1]);
       edgeVertex.x += res;
       edgeVertex.z += lerp(0, res, amt);
       break;
 
-    case 10:
+    case 10 :
       amt = (threshold - corners[2])/(corners[6] - corners[2]);
       edgeVertex.x += res;
       edgeVertex.y += res;
       edgeVertex.z += lerp(0, res, amt);
       break;
 
-    case 11:
+    case 11 :
       amt = (threshold - corners[3])/(corners[7] - corners[3]);
       edgeVertex.y += res;
       edgeVertex.z += lerp(0, res, amt);
       break;
 
-    default:
+    default :
       println("WARN: out of bounds edge index when finding vertex");
       break;
     }
 
-    assert(amt <= 1 && amt > 0);
+    if (amt > 1 || amt < 0) {
+      println(i, j, k, idx, amt);
+    }
+
+    assert(amt <= 1 && amt >= 0);
     return edgeVertex;
   }
 
