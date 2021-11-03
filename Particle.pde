@@ -3,11 +3,11 @@ class Particle {
   float r = 20; // radius
   int cubeSize;
   float G = 11;
-  float velocityLimit = 1.5;
+  float velocityLimit = 0.6;
 
   Particle(PVector startingPos, int cubeSize) {
     this.pos = startingPos;
-    this.vel = new PVector();//PVector.mult(PVector.random3D(), 2);
+    this.vel = PVector.mult(PVector.random3D(), 0.6);
     this.acc = new PVector();
 
     this.cubeSize = cubeSize;

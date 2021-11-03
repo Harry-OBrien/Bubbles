@@ -1,29 +1,41 @@
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
+
 class ParticleSystem {
   // TODO: Control resolution by slider
+  boolean showParticles = false;
 
   // Particles
-  ArrayList<Particle> particles;
-  int attractionDistance = 100;
+  private ArrayList<Particle> particles;
+  private int attractionDistance = 100;
+  private float c = 0.010; // coeff of friction
+  private float gravityStrength = 0.0101;
 
   // Boundary
   private int cubeSize;
 
   // Marching cube data
-  float[][][] field;
+  private float[][][] field;
 
   private int res;
   private int cols, rows, aisles;
   private float threshold;
 
-  private ArrayList<ArrayList<PVector>> triangleVertices;
+  private BlockingQueue triangleVertices;
+  ExecutorService pool;
 
-  ParticleSystem(int cubeSize, int res, float threshold) {
+  ParticleSystem(int cubeSize, int res, float threshold, int initialBubbleCount) {
     this.cubeSize = cubeSize;
 
     this.res = res;
     this.threshold = threshold;
 
-    triangleVertices = new ArrayList<ArrayList<PVector>>();
+    pool = Executors.newFixedThreadPool(10);
+    triangleVertices = new LinkedBlockingQueue<ArrayList<PVector>>();
 
     // 3D Field
     cols = 1 + cubeSize / res;
@@ -34,7 +46,7 @@ class ParticleSystem {
     // Particles
     particles = new ArrayList<Particle>();
 
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < initialBubbleCount; i++) {
       PVector startingPos = new PVector(random(100, 400), random(100, 400), random(100, 400));
       addBubbleAt(startingPos);
     }
@@ -49,23 +61,28 @@ class ParticleSystem {
     calculateFieldValues();
 
     // Generate the mesh for the previously calculated field values
-    createMesh();
+    if (!showParticles)
+      createMesh();
   }
 
-  // MARK: DRAW
+  // MARK: SHOW
   void show() {
     // Draw particles
     pushMatrix();
     translate(-(cubeSize/2), -(cubeSize/2), 0);
     // Draw the particles
-    //for (Particle p : particles) p.show();
+    if (showParticles) {
+      for (Particle p : particles) p.show();
 
-    //Draw the field
-    //fill(255);
-    //drawField();
+      //Draw the field
+      fill(255);
+      drawField();
+    }
 
     // Now draw the bubble mesh
-    drawMesh();
+    else {
+      drawMesh();
+    }
     popMatrix();
   }
 
@@ -85,11 +102,11 @@ class ParticleSystem {
       }
 
       // Apply environment variables to particle
-      PVector gravity = new PVector(0, 0, -0.01);
+      PVector gravity = new PVector(0, 0, -gravityStrength);
       p.applyForce(gravity);
 
       // apply friction
-      float c = 0.04;
+
       PVector friction = p.getVel();
       friction.mult(-1);
       friction.normalize();
@@ -139,7 +156,6 @@ class ParticleSystem {
     }
   }
 
-
   // MARK: MARCHING CUBE
   private void drawField() {
     strokeWeight(4);
@@ -155,14 +171,21 @@ class ParticleSystem {
     }
   }
 
-  // MARCHING CUBES ALGORITHM
-  private void createMesh() {
-    // we go to rows - 1 because the final row/col/aisle doesn't have any neighbours
-    for (int i = 0; i < cols - 1; i++) {
-      for (int j = 0; j < rows - 1; j++) {
-        for (int k = 0; k < aisles - 1; k++) {
+  private class MeshGenerator implements Runnable {
+    BlockingQueue queue;
+    int col;
+
+    MeshGenerator(BlockingQueue queue, int col) {
+      this.queue = queue;
+      this.col = col;
+    }
+
+    public void run() {
+      // Marching Cubes Algorithm
+      for (int row = 0; row < rows - 1; row++) {
+        for (int aisle = 0; aisle < aisles - 1; aisle++) {
           // Get the case that we should draw depending on the value of the points around us
-          int cubeIndex = getState(i, j, k);
+          int cubeIndex = getCubeState(col, row, aisle);
           int[][] triangles = cases[cubeIndex];
 
           // For each triangle given for this case, calculate the location of the vertices
@@ -170,30 +193,62 @@ class ParticleSystem {
             ArrayList<PVector> vertices = new ArrayList<PVector>();
             for (int edge : triangle) {
 
-              PVector vertex = vertexLocationForEdge(i, j, k, edge);
+              PVector vertex = vertexLocationForEdge(col, row, aisle, edge);
 
               // Add position to vertex list
               vertices.add(vertex);
             }
 
             // Add to a list to be drawn later!
-            triangleVertices.add(vertices);
+            try {
+              queue.put(vertices);
+            }
+            catch (InterruptedException e) {
+              println("Error when adding to queue!", e);
+            }
           }
         }
       }
     }
   }
 
+  private void createMesh() {
+    ArrayList<Future> futures = new ArrayList<Future>();
+    // we go to rows - 1 because the final row/col/aisle doesn't have any neighbours
+    for (int i = 0; i < cols - 1; i++) {
+      MeshGenerator generator = new MeshGenerator(triangleVertices, i);
+      futures.add(pool.submit(generator));
+    }
+
+    for (Future f : futures) {
+      try {
+        f.get();
+      }
+      catch (ExecutionException e) {
+      }
+      catch (InterruptedException e) {
+      }
+    }
+    futures.clear();
+  }
+
   private void drawMesh() {
-    fill(255, 255, 255, 120);
+    fill(255, 255, 255, 200);
     //fill(255);
     noStroke();
-    for (ArrayList<PVector> vertices : triangleVertices) {
-      beginShape(TRIANGLES);
-      for (PVector v : vertices) {
-        vertex(v.x, v.y, v.z);
+    while (!triangleVertices.isEmpty()) {
+      try {
+        ArrayList<PVector> vertices = (ArrayList<PVector>) triangleVertices.take();
+        beginShape(TRIANGLES);
+        for (PVector v : vertices) {
+          vertex(v.x, v.y, v.z);
+        }
+        endShape();
       }
-      endShape();
+      catch(InterruptedException e) {
+        println("Error when taking from queue!", e);
+        break;
+      }
     }
     triangleVertices.clear();
   }
@@ -213,7 +268,7 @@ class ParticleSystem {
     return vertices;
   }
 
-  private int getState(int x, int y, int z) {
+  private int getCubeState(int x, int y, int z) {
     float[] vertices = getVertices(x, y, z);
 
     int cube_index = 0;
@@ -307,10 +362,6 @@ class ParticleSystem {
     default :
       println("WARN: out of bounds edge index when finding vertex");
       break;
-    }
-
-    if (amt > 1 || amt < 0) {
-      println(i, j, k, idx, amt);
     }
 
     assert(amt <= 1 && amt >= 0);

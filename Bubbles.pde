@@ -9,12 +9,13 @@ void setup() {
   fullScreen(P3D);
   pixelDensity(2);
   //noCursor();
-  frameRate(30);
+  frameRate(60);
   rectMode(CENTER);
+  smooth(8);
 
   // Entities
   scene = new Scene(this, cubeSize);
-  sys = new ParticleSystem(cubeSize, 10, 0.4);
+  sys = new ParticleSystem(cubeSize, 10, 0.4, 13);
 }
 
 void draw() {
