@@ -23,10 +23,10 @@ class Scene {
     lights();
 
 
-    drawBoundingBox();
+    //drawBoundingBox();
 
     // Draw the floor
-    drawFloor();
+    //drawFloor();
 
     // HUD
     drawHUD();

@@ -7,11 +7,11 @@ ParticleSystem sys;
 void setup() {
   // Environment settings
   fullScreen(P3D);
-  pixelDensity(2);
+  //pixelDensity(2);
   //noCursor();
   frameRate(60);
   rectMode(CENTER);
-  smooth(8);
+  //smooth(8);
 
   // Entities
   scene = new Scene(this, cubeSize);
