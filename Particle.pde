@@ -1,31 +1,49 @@
 class Particle {
   PVector pos, vel, acc;
-  float r = 20; // radius
+  float r; // radius
   int cubeSize;
-  float G = 11;
-  float velocityLimit = 0.6;
+  float G = 8;
 
-  Particle(PVector startingPos, int cubeSize) {
+  float velocityLimit = 1.6;
+  float velocityLimitMultiplier = 1;
+
+  PartilePopDelegate delegate;
+
+  Boolean attracted = false;
+
+  Particle(PVector startingPos, float r, int cubeSize, PartilePopDelegate delegate, PVector startingVel, Boolean chosen) {
     this.pos = startingPos;
-    this.vel = PVector.mult(PVector.random3D(), 0.6);
+    this.vel = startingVel;
     this.acc = new PVector();
+    this.r = r;
 
+    this.delegate = delegate;
     this.cubeSize = cubeSize;
+  }
+
+  Particle(PVector startingPos, float r, int cubeSize, PartilePopDelegate delegate) {
+    this(startingPos, r, cubeSize, delegate, new PVector(), false);
   }
 
   void update() {
     vel.add(acc);
+    vel.limit(velocityLimit * velocityLimitMultiplier);
 
-    vel.limit(velocityLimit);
-
-    // TODO: Pop bubble on collision with floor
+    // Bound of walls, pop when hit floor
     if (this.pos.x <= r || this.pos.x >= cubeSize - r) vel.x *= -1;
     if (this.pos.y <= r || this.pos.y >= cubeSize - r) vel.y *= -1;
-    if (this.pos.z <= r || this.pos.z >= cubeSize - r) vel.z *= -1;
+    if (this.pos.z >= cubeSize - r) vel.z *= -1;
+    if (this.pos.z <= r) {
+      delegate.particleShouldPop(this);
+      return;
+    }
 
     pos.add(vel);
 
-    acc.mult(0);
+    // We only remove some of the acceleration to immitate inertia
+    acc.mult(0.8);
+
+    attracted = false;
   }
 
   void show() {
@@ -37,26 +55,33 @@ class Particle {
     popMatrix();
   }
 
-  void attractedTo(Particle other) {
-    PVector otherPos = other.getPos();
-    PVector force = PVector.sub(otherPos, pos);
-    float dist = force.mag();
+  void setVelocityLimitMultiplier(float multiplier) {
+    multiplier = constrain(multiplier, 0, 1);
+    velocityLimitMultiplier = multiplier;
+  }
 
-    dist = constrain(dist, 1, 25);
+  void attractedTo(Particle other) {
+    attracted = true;
+
+    PVector target = other.getPos();
+    PVector force = PVector.sub(target, pos);
+    float dist = force.mag();
+    dist = constrain(dist, 5, 25);
+
     float distSq = dist * dist;
 
     float strength = G / distSq;
     force.setMag(strength);
 
     // bounce particles off ourself
-    if (dist < r) force.mult(-1.2);
+    if (dist < r) force.mult(-0.1);
 
     applyForce(force);
   }
 
   void applyForce(PVector force) {
-    // f = m * a => f = (1) * a => f = a;
-    acc.add(force);
+    // f/m = a
+    acc.add(PVector.div(force, r / 10));
   }
 
   PVector getPos() {

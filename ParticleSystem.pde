@@ -1,19 +1,24 @@
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutorService; //<>//
 import java.util.concurrent.Executors;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.ExecutionException;
+import processing.sound.*;
 
-class ParticleSystem {
-  // TODO: Control resolution by slider
+class ParticleSystem implements PartilePopDelegate {
   boolean showParticles = false;
+
+  Scene scene;
 
   // Particles
   private ArrayList<Particle> particles;
-  private int attractionDistance = 100;
-  private float c = 0.010; // coeff of friction
-  private float gravityStrength = 0.0101;
+  private float c = 0.00802; // coeff of friction
+  private float gravityStrength = 0.00800001;
+  private int distanceThresh = 100;
+  private int particleRadius = 16;
+  private int p_radius_sq;
+  private ArrayList<Particle> particlesToPop;
 
   // Boundary
   private int cubeSize;
@@ -26,34 +31,78 @@ class ParticleSystem {
   private float threshold;
 
   private BlockingQueue triangleVertices;
-  ExecutorService pool;
+  private ExecutorService pool;
 
-  ParticleSystem(int cubeSize, int res, float threshold, int initialBubbleCount) {
+  private final int bubbleGunCount = 5;
+  private BubbleGun[] bubbleguns;
+
+  SoundFile popSound;
+
+  PrintWriter output;
+  long runTime = 1 * 60 * 1000;
+
+  ParticleSystem(PApplet applet, Scene scene, int cubeSize, float threshold, int initialBubbleCount) {
+    this.scene = scene;
     this.cubeSize = cubeSize;
 
-    this.res = res;
+    this.res = scene.getResolutionValue();
     this.threshold = threshold;
 
-    pool = Executors.newFixedThreadPool(10);
-    triangleVertices = new LinkedBlockingQueue<ArrayList<PVector>>();
+    this.p_radius_sq = particleRadius * particleRadius;
+    this.particlesToPop = new ArrayList<Particle>();
+
+    this.pool = Executors.newFixedThreadPool(9);
+    this.triangleVertices = new LinkedBlockingQueue<ArrayList<PVector>>();
 
     // 3D Field
-    cols = 1 + cubeSize / res;
-    rows = 1 + cubeSize / res;
-    aisles = 1 + cubeSize / res;
-    field = new float[cols][rows][aisles];
+    updateFieldRes(res);
 
     // Particles
-    particles = new ArrayList<Particle>();
+    this.particles = new ArrayList<Particle>();
 
     for (int i = 0; i < initialBubbleCount; i++) {
-      PVector startingPos = new PVector(random(100, 400), random(100, 400), random(100, 400));
-      addBubbleAt(startingPos);
+      addRandomBubble();
     }
+
+    bubbleguns = new BubbleGun[bubbleGunCount];
+    for (int i = 0; i < bubbleGunCount; i++) {
+      PVector pos = new PVector(random(20, cubeSize - 20), random(20, cubeSize - 20), random(200, cubeSize - 20));
+      PVector vel = new PVector(random(-1, 1), random(-1, 1), random(0.2, 0.8));  // any x, any 1, z facing upwards
+      bubbleguns[i] = new BubbleGun(this, pos, vel, 10.0, (long) random(800, 4000));
+    }
+
+    popSound = new SoundFile(applet, "bubble_pop_short.mp3");
+    
+    output = createWriter("framerate_at_res_" + this.res + ".csv");
+    output.println("frame,fps,particle_count");
   }
 
+  int frame_count = 0;
   // MARK: UPDATE
   void update() {
+    // Exit after a given amount of time
+    if (millis() > runTime) {
+      output.flush();
+      output.close();
+      exit();
+    }
+    // log data
+    output.println(frame_count + "," + frameRate +"," + particles.size());
+    frame_count++;
+    
+    for (int i = 0; i < bubbleGunCount; i++)
+      bubbleguns[i].update();
+
+    //println(particles.size());
+    this.showParticles = scene.getParticleToggleValue();
+
+    int res = scene.getResolutionValue();
+    if (res != this.res) {
+      updateFieldRes(res);
+    }
+
+    distanceThresh = scene.getAttractionDistance();
+
     // Move the particles and add any attraction and environmental forces
     updateParticles();
 
@@ -70,8 +119,12 @@ class ParticleSystem {
     // Draw particles
     pushMatrix();
     translate(-(cubeSize/2), -(cubeSize/2), 0);
-    // Draw the particles
+
+    // Draw the particles and bubble generators
     if (showParticles) {
+      for (int i = 0; i < bubbleGunCount; i++)
+        bubbleguns[i].show();
+
       for (Particle p : particles) p.show();
 
       //Draw the field
@@ -86,72 +139,190 @@ class ParticleSystem {
     popMatrix();
   }
 
+  // MARK: Field
+  void updateFieldRes(int newRes) {
+    this.res = newRes;
+
+    this.cols = 1 + cubeSize / res;
+    this.rows = 1 + cubeSize / res;
+    this.aisles = 1 + cubeSize / res;
+    this.field = new float[cols][rows][aisles];
+    for (int i = 0; i < cols; i++) {
+      for (int j = 0; j < rows; j++) {
+        for (int k = 0; k < aisles; k++) {
+          // Cap off the edges
+          if ( i == 0 || i == cols - 1 ||
+            j == 0 || j == rows - 1 ||
+            k == 0 || k == aisles - 1) {
+            field[i][j][k] = max(threshold - 0.1, 0.05);
+          }
+        }
+      }
+    }
+  }
+
   // MARK: PARTICLES
   private void updateParticles() {
+
     // Update particles
     for (Particle p : particles) {
+      // Update slider value
+      p.setVelocityLimitMultiplier(scene.getVelocityModifier() / 100);
+
+      PVector p_pos = p.getPos();
       for (Particle other : particles) {
         //Ignore ourself
         if (p == other) continue;
 
-        // Attract the particles towards each other
-        // TODO: attract to each other based on metaballs algorithm
-        float dist = PVector.sub(other.getPos(), p.getPos()).mag();
-        if (dist < attractionDistance)
+        // Check if we need to merge particles
+        PVector diff = PVector.sub(other.getPos(), p_pos);
+        if (diff.mag() < distanceThresh) {
           p.attractedTo(other);
+        }
       }
 
       // Apply environment variables to particle
-      PVector gravity = new PVector(0, 0, -gravityStrength);
+      PVector gravity = new PVector(0, 0, -gravityStrength * scene.getGravityModifier() / 100);
       p.applyForce(gravity);
 
       // apply friction
-
       PVector friction = p.getVel();
       friction.mult(-1);
       friction.normalize();
-      friction.mult(c);
+      friction.mult(c * scene.getFrictionModifier() / 100);
       p.applyForce(friction);
 
       p.update();
     }
+
+    // Remove any particles we want to pop
+    for (Particle toRemove : particlesToPop) {
+      assert(particles.remove(toRemove));
+    }
+    particlesToPop.clear();
   }
 
+  void particleShouldPop(Particle initialPop) {
+    if (particlesToPop.contains(initialPop)) return;
+
+    // Play a 'pop' sound!
+    popSound.play();
+
+    ArrayList<Particle> particleNeighbours = new ArrayList<Particle>();
+    ArrayList<Particle> unselectedParticles = (ArrayList<Particle>) particles.clone();
+
+    particleNeighbours.add(initialPop);
+
+
+    // find nearby particles
+    while (!particleNeighbours.isEmpty()) {
+      Particle p = particleNeighbours.get(0);
+      assert(particleNeighbours.remove(p));
+
+      particlesToPop.add(p);
+      assert(unselectedParticles.remove(p));
+
+      for (int i = 0; i < unselectedParticles.size(); i++) {
+        Particle other = unselectedParticles.get(i);
+
+        PVector diff = PVector.sub(p.getPos(), other.getPos());
+
+        if (!particleNeighbours.contains(other) && !particlesToPop.contains(other) && diff.mag() < distanceThresh)
+          particleNeighbours.add(other);
+      }
+    }
+  }
+
+  void addRandomBubble() {
+    PVector randomPos = new PVector(random(100, 400), random(100, 400), random(100, 400));
+    addBubbleAt(randomPos);
+  }
+
+  int bubbleAddedCount = 0;
   void addBubbleAt(PVector pos) {
     // Make sure within bounds
     if (pos.x > 11 && pos.x < 489 &&
       pos.y > 11 && pos.y < 489 &&
       pos.z > 11 && pos.x < 489)
     {
-      Particle p = new Particle(pos, cubeSize);
+      Particle p = new Particle(pos, particleRadius, cubeSize, this);
       particles.add(p);
-    }
+      bubbleAddedCount++;
+    } else
+      println("WARN: Attempted to create bubble out of environment");
   }
 
-  private void calculateFieldValues() {
-    for (int i = 0; i < cols; i++) {
+  void addBubbleAt(PVector pos, PVector vel) {
+    // Make sure within bounds
+    if (pos.x > 11 && pos.x < 489 &&
+      pos.y > 11 && pos.y < 489 &&
+      pos.z > 11 && pos.x < 489)
+    {
+      Particle p = new Particle(pos, particleRadius, cubeSize, this, vel, bubbleAddedCount == 10);
+      particles.add(p);
+      bubbleAddedCount++;
+    } else
+      println("WARN: Attempted to create bubble out of environment");
+  }
+
+  private class MetaballsValueCalculator implements Runnable {
+    int col;
+    ArrayList<PVector> particleLocations;
+
+    MetaballsValueCalculator(int col, ArrayList<PVector> particleLocations) {
+      this.col = col;
+      this.particleLocations = particleLocations;
+    }
+
+    void run() {
+      int scaledCol = col * res;
+      int scaledRow = 0;
       for (int j = 0; j < rows; j++) {
+        if (j == 0 || j == rows - 1) {
+          // Cap off the edges - we've already set the values when creating the field
+          scaledRow += res;
+          continue;
+        }
+        int scaledAisle = 0;
         for (int k = 0; k < aisles; k++) {
-          // Cap off the edges, don't bother with the bottom
-          if ( i == 0 || i == cols - 1 ||
-            j == 0 || j == rows - 1 ||
-            k == aisles - 1) {
-            field[i][j][k] = 0.3;
+          if (k == 0 || k == aisles - 1) {
+            scaledAisle += res;
             continue;
           }
           // Metaballs implementation
           float sum = 0;
-          PVector scaledLocation = new PVector(i * res, j * res, k * res);
-          for (Particle p : particles) {
-            PVector pos = p.getPos();
-            PVector diff = PVector.sub(scaledLocation, pos);
-
-
-            float r = p.getRadius();
-            sum += (r * r) / diff.magSq();
+          PVector scaledLocation = new PVector(scaledCol, scaledRow, scaledAisle);
+          for (PVector p_loc : particleLocations) {
+            PVector diff = PVector.sub(scaledLocation, p_loc);
+            sum += (scene.getMeshSizeModifier() / 100) * p_radius_sq / diff.magSq();
           }
-          field[i][j][k] = sum;
+          field[col][j][k] = sum;
+          scaledAisle += res;
         }
+        scaledRow += res;
+      }
+    }
+  }
+
+  private void calculateFieldValues() {
+    ArrayList<Future> futures = new ArrayList<Future>();
+    ArrayList<PVector> particleLocations = new ArrayList<PVector>();
+    for (Particle p : particles) particleLocations.add(p.getPos());
+
+    for (int i = 0; i < cols; i++) {
+      if ( i == 0 || i == cols - 1) continue;
+
+      MetaballsValueCalculator generator = new MetaballsValueCalculator(i, particleLocations);
+      futures.add(pool.submit(generator));
+    }
+
+    for (Future f : futures) {
+      try {
+        f.get();
+      }
+      catch (ExecutionException e) {
+      }
+      catch (InterruptedException e) {
       }
     }
   }
@@ -229,12 +400,11 @@ class ParticleSystem {
       catch (InterruptedException e) {
       }
     }
-    futures.clear();
   }
 
   private void drawMesh() {
-    fill(255, 255, 255, 200);
-    //fill(255);
+    //fill(255, 255, 255, 200);
+    fill(255);
     noStroke();
     while (!triangleVertices.isEmpty()) {
       try {
